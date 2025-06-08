@@ -74,7 +74,8 @@ export class DatabaseService {
   updateTransaction = (id: string, transactionData: any) => this.transactions.updateTransaction(id, transactionData);
   deleteTransaction = (id: string) => this.transactions.deleteTransaction(id);
 
- 
+  // Add transaction method for student fees
+  addTransaction = (transactionData: any) => this.transactions.createTransaction(transactionData);
 
   // ==========================================
   // RECURRING TRANSACTION SERVICE METHODS
@@ -225,6 +226,7 @@ export class DatabaseService {
       { name: 'Bills & Utilities', type: 'expense', color: '#FECA57', icon: '💡' },
       { name: 'Salary', type: 'income', color: '#48CAE4', icon: '💰' },
       { name: 'Freelance', type: 'income', color: '#06FFA5', icon: '💼' },
+      { name: 'Tuition Fees', type: 'income', color: '#06FFA5', icon: '🎓' }, // Added for student management
     ] as const;
 
     for (const category of defaultCategories) {

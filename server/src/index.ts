@@ -5,8 +5,9 @@ import morgan from 'morgan';
 import { config } from 'dotenv';
 import Database from 'better-sqlite3';
 import { initializeDatabase } from './db/schema';
+import { initializeStudentDatabase } from './db/studentSchema';
 import { DatabaseService}  from './db/index';
-import authRoutes, { initializeAuth } from './routes/auth'; // Import initializeAuth
+import authRoutes, { initializeAuth } from './routes/auth';
 import categoryRoutes from './routes/categories';
 import transactionRoutes from './routes/transactions';
 import recurringRoutes from './routes/recurring';
@@ -21,6 +22,7 @@ config();
 // Initialize database
 const db = new Database(process.env.DATABASE_PATH || './data.db');
 initializeDatabase(db);
+initializeStudentDatabase(db);
 export const dbService = new DatabaseService(db);
 
 // IMPORTANT: Initialize auth with database service BEFORE using routes
