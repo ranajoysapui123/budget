@@ -48,6 +48,7 @@ export interface FeePayment {
   paymentMethod?: 'cash' | 'card' | 'bank_transfer' | 'upi';
   status: 'pending' | 'partial' | 'paid' | 'overdue';
   notes?: string;
+  aggregated?: boolean; // New field to track if this payment has been aggregated
   createdAt: string;
   updatedAt: string;
 }
@@ -267,13 +268,13 @@ export class StudentService {
     const stmt = this.db.prepare(`
       INSERT INTO fee_payments (
         id, student_id, month, year, total_amount, paid_amount,
-        payment_date, payment_method, status, notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        payment_date, payment_method, status, notes, aggregated, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
       id, fee.studentId, fee.month, fee.year, fee.totalAmount, fee.paidAmount,
-      fee.paymentDate, fee.paymentMethod, fee.status, fee.notes, now, now
+      fee.paymentDate, fee.paymentMethod, fee.status, fee.notes, fee.aggregated || false, now, now
     );
 
     return { ...fee, id, createdAt: now, updatedAt: now };
@@ -284,7 +285,7 @@ export class StudentService {
       SELECT 
         id, student_id as studentId, month, year, total_amount as totalAmount,
         paid_amount as paidAmount, payment_date as paymentDate,
-        payment_method as paymentMethod, status, notes,
+        payment_method as paymentMethod, status, notes, aggregated,
         created_at as createdAt, updated_at as updatedAt
       FROM fee_payments 
       WHERE student_id = ?
@@ -388,5 +389,40 @@ export class StudentService {
       totalPending: result.totalPending || 0,
       studentCount: result.studentCount || 0
     };
+  }
+
+  // NEW: Get unaggregated fee payments for monthly aggregation
+  async getUnaggregatedFeePayments(month: string, year: number): Promise<FeePayment[]> {
+    const stmt = this.db.prepare(`
+      SELECT 
+        id, student_id as studentId, month, year, total_amount as totalAmount,
+        paid_amount as paidAmount, payment_date as paymentDate,
+        payment_method as paymentMethod, status, notes, aggregated,
+        created_at as createdAt, updated_at as updatedAt
+      FROM fee_payments 
+      WHERE month = ? AND year = ? AND (aggregated = 0 OR aggregated IS NULL) AND status = 'paid'
+    `);
+    
+    return stmt.all(month, year) as FeePayment[];
+  }
+
+  // NEW: Mark fee payments as aggregated
+  async markPaymentsAsAggregated(paymentIds: string[]): Promise<void> {
+    if (paymentIds.length === 0) return;
+    
+    const placeholders = paymentIds.map(() => '?').join(',');
+    const stmt = this.db.prepare(`
+      UPDATE fee_payments 
+      SET aggregated = 1, updated_at = ?
+      WHERE id IN (${placeholders})
+    `);
+    
+    stmt.run(new Date().toISOString(), ...paymentIds);
+  }
+
+  // NEW: Get total collected fees for a month (for aggregation)
+  async getTotalCollectedFeesForMonth(month: string, year: number): Promise<number> {
+    const unaggregatedPayments = await this.getUnaggregatedFeePayments(month, year);
+    return unaggregatedPayments.reduce((total, payment) => total + payment.paidAmount, 0);
   }
 }

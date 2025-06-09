@@ -10,7 +10,8 @@ import {
   Calendar,
   AlertCircle,
   CheckCircle,
-  Clock
+  Clock,
+  ArrowUpCircle
 } from 'lucide-react';
 import { useNotification } from '../../contexts/NotificationContext';
 
@@ -25,10 +26,20 @@ interface DashboardStats {
 
 interface RecentActivity {
   id: string;
-  type: 'enrollment' | 'payment' | 'new_student';
+  type: 'enrollment' | 'payment' | 'new_student' | 'aggregation';
   message: string;
   timestamp: string;
   amount?: number;
+}
+
+interface AggregationHistory {
+  id: string;
+  month: string;
+  year: number;
+  totalAmount: number;
+  paymentCount: number;
+  transactionId: string;
+  aggregatedAt: string;
 }
 
 const StudentDashboard: React.FC = () => {
@@ -43,10 +54,12 @@ const StudentDashboard: React.FC = () => {
   });
   
   const [recentActivity, setRecentActivity] = useState<RecentActivity[]>([]);
+  const [aggregationHistory, setAggregationHistory] = useState<AggregationHistory[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchDashboardData();
+    fetchAggregationHistory();
   }, []);
 
   const fetchDashboardData = async () => {
@@ -134,6 +147,23 @@ const StudentDashboard: React.FC = () => {
     }
   };
 
+  const fetchAggregationHistory = async () => {
+    try {
+      const response = await fetch('/api/students/fees/aggregation-history', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      
+      if (response.ok) {
+        const history = await response.json();
+        setAggregationHistory(history);
+      }
+    } catch (error) {
+      console.error('Error fetching aggregation history:', error);
+    }
+  };
+
   const generateMonthlyFees = async () => {
     try {
       const currentDate = new Date();
@@ -168,6 +198,70 @@ const StudentDashboard: React.FC = () => {
     }
   };
 
+  const aggregateCurrentMonthFees = async () => {
+    try {
+      const currentDate = new Date();
+      const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+      const year = currentDate.getFullYear();
+      
+      const response = await fetch('/api/students/fees/aggregate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ month, year })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        showNotification({
+          type: 'success',
+          message: result.message
+        });
+        fetchDashboardData();
+        fetchAggregationHistory();
+      } else {
+        throw new Error('Failed to aggregate fees');
+      }
+    } catch (error) {
+      console.error('Error aggregating fees:', error);
+      showNotification({
+        type: 'error',
+        message: 'Failed to aggregate monthly fees'
+      });
+    }
+  };
+
+  const autoAggregateLastMonth = async () => {
+    try {
+      const response = await fetch('/api/students/fees/auto-aggregate', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        showNotification({
+          type: 'success',
+          message: result.message
+        });
+        fetchDashboardData();
+        fetchAggregationHistory();
+      } else {
+        throw new Error('Failed to auto-aggregate fees');
+      }
+    } catch (error) {
+      console.error('Error in auto-aggregation:', error);
+      showNotification({
+        type: 'error',
+        message: 'Failed to auto-aggregate fees'
+      });
+    }
+  };
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -194,6 +288,8 @@ const StudentDashboard: React.FC = () => {
         return <Users className="w-4 h-4 text-blue-600" />;
       case 'enrollment':
         return <BookOpen className="w-4 h-4 text-purple-600" />;
+      case 'aggregation':
+        return <ArrowUpCircle className="w-4 h-4 text-orange-600" />;
       default:
         return <Clock className="w-4 h-4 text-gray-600" />;
     }
@@ -223,13 +319,22 @@ const StudentDashboard: React.FC = () => {
             Overview of your tuition center
           </p>
         </div>
-        <Button
-          variant="primary"
-          onClick={generateMonthlyFees}
-          icon={<Calendar className="w-4 h-4" />}
-        >
-          Generate Monthly Fees
-        </Button>
+        <div className="flex space-x-2">
+          <Button
+            variant="outline"
+            onClick={generateMonthlyFees}
+            icon={<Calendar className="w-4 h-4" />}
+          >
+            Generate Monthly Fees
+          </Button>
+          <Button
+            variant="primary"
+            onClick={aggregateCurrentMonthFees}
+            icon={<ArrowUpCircle className="w-4 h-4" />}
+          >
+            Aggregate to Main DB
+          </Button>
+        </div>
       </div>
 
       {/* Stats Grid */}
@@ -332,7 +437,7 @@ const StudentDashboard: React.FC = () => {
         </motion.div>
       </div>
 
-      {/* Recent Activity */}
+      {/* Recent Activity and Aggregation History */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <motion.div
           initial={{ opacity: 0, x: -20 }}
@@ -374,42 +479,94 @@ const StudentDashboard: React.FC = () => {
           transition={{ delay: 0.6 }}
         >
           <Card className="p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-              Quick Actions
-            </h3>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Fee Aggregation History
+              </h3>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={autoAggregateLastMonth}
+                icon={<ArrowUpCircle className="w-4 h-4" />}
+              >
+                Auto-Aggregate Last Month
+              </Button>
+            </div>
             <div className="space-y-3">
-              <Button
-                variant="outline"
-                className="w-full justify-start"
-                icon={<Users className="w-4 h-4" />}
-              >
-                View All Students
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full justify-start"
-                icon={<DollarSign className="w-4 h-4" />}
-              >
-                Fee Collection Report
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full justify-start"
-                icon={<BookOpen className="w-4 h-4" />}
-              >
-                Manage Subjects
-              </Button>
-              <Button
-                variant="outline"
-                className="w-full justify-start"
-                icon={<TrendingUp className="w-4 h-4" />}
-              >
-                Analytics & Reports
-              </Button>
+              {aggregationHistory.length > 0 ? (
+                aggregationHistory.slice(0, 5).map((record) => (
+                  <div key={record.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">
+                        {record.month}/{record.year}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {record.paymentCount} payments
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-medium text-green-600">
+                        {formatCurrency(record.totalAmount)}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {new Date(record.aggregatedAt).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-4 text-gray-500 dark:text-gray-400">
+                  <ArrowUpCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">No aggregations yet</p>
+                </div>
+              )}
             </div>
           </Card>
         </motion.div>
       </div>
+
+      {/* Quick Actions */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.7 }}
+      >
+        <Card className="p-6">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            Quick Actions
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+            <Button
+              variant="outline"
+              className="justify-start"
+              icon={<Users className="w-4 h-4" />}
+            >
+              View All Students
+            </Button>
+            <Button
+              variant="outline"
+              className="justify-start"
+              icon={<DollarSign className="w-4 h-4" />}
+            >
+              Fee Collection Report
+            </Button>
+            <Button
+              variant="outline"
+              className="justify-start"
+              icon={<BookOpen className="w-4 h-4" />}
+            >
+              Manage Subjects
+            </Button>
+            <Button
+              variant="outline"
+              className="justify-start"
+              icon={<TrendingUp className="w-4 h-4" />}
+            >
+              Analytics & Reports
+            </Button>
+          </div>
+        </Card>
+      </motion.div>
     </div>
   );
 };

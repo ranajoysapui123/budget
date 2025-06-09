@@ -53,7 +53,7 @@ export const initializeStudentDatabase = (db: Database): void => {
     )
   `);
 
-  // Create fee_payments table
+  // Create fee_payments table with aggregated field
   db.exec(`
     CREATE TABLE IF NOT EXISTS fee_payments (
       id TEXT PRIMARY KEY,
@@ -66,10 +66,25 @@ export const initializeStudentDatabase = (db: Database): void => {
       payment_method TEXT CHECK(payment_method IN ('cash', 'card', 'bank_transfer', 'upi')),
       status TEXT CHECK(status IN ('pending', 'partial', 'paid', 'overdue')) DEFAULT 'pending',
       notes TEXT,
+      aggregated INTEGER DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (student_id) REFERENCES students (id) ON DELETE CASCADE,
       UNIQUE(student_id, month, year)
+    )
+  `);
+
+  // Create monthly_aggregations table to track aggregation history
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS monthly_aggregations (
+      id TEXT PRIMARY KEY,
+      month TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      total_amount REAL NOT NULL,
+      payment_count INTEGER NOT NULL,
+      transaction_id TEXT,
+      aggregated_at TEXT NOT NULL,
+      UNIQUE(month, year)
     )
   `);
 
@@ -83,6 +98,8 @@ export const initializeStudentDatabase = (db: Database): void => {
     CREATE INDEX IF NOT EXISTS idx_fee_payments_student ON fee_payments(student_id);
     CREATE INDEX IF NOT EXISTS idx_fee_payments_month_year ON fee_payments(month, year);
     CREATE INDEX IF NOT EXISTS idx_fee_payments_status ON fee_payments(status);
+    CREATE INDEX IF NOT EXISTS idx_fee_payments_aggregated ON fee_payments(aggregated);
+    CREATE INDEX IF NOT EXISTS idx_monthly_aggregations_month_year ON monthly_aggregations(month, year);
   `);
 
   // Insert default subjects if they don't exist

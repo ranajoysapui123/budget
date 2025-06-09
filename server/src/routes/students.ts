@@ -165,20 +165,9 @@ const recordFeePayment: RequestHandler = async (req, res) => {
       paymentDate: new Date().toISOString(),
       paymentMethod,
       status: status as any,
-      notes
+      notes,
+      aggregated: false // Mark as not aggregated initially
     });
-
-    // If fully paid, add to main financial database as income
-    if (status === 'paid') {
-      await dbService.addTransaction({
-        description: `Tuition fees - ${month}/${year}`,
-        amount: totalAmount,
-        date: new Date().toISOString(),
-        type: 'income',
-        category: 'tuition-fees',
-        mainCategory: 'business'
-      });
-    }
     
     res.status(201).json(feeRecord);
   } catch (error) {
@@ -222,7 +211,8 @@ const generateMonthlyFees: RequestHandler = async (req, res) => {
             year,
             totalAmount,
             paidAmount: 0,
-            status: 'pending'
+            status: 'pending',
+            aggregated: false
           });
           feeRecords.push(feeRecord);
         } catch (error) {
@@ -239,6 +229,181 @@ const generateMonthlyFees: RequestHandler = async (req, res) => {
   } catch (error) {
     console.error('Error generating monthly fees:', error);
     res.status(500).json({ message: 'Error generating monthly fees' });
+  }
+};
+
+// NEW: Aggregate monthly fees to main financial database
+const aggregateMonthlyFees: RequestHandler = async (req, res) => {
+  try {
+    const { month, year } = req.body;
+    
+    // Get all unaggregated paid fees for the month
+    const unaggregatedPayments = await dbService.students.getUnaggregatedFeePayments(month, year);
+    
+    if (unaggregatedPayments.length === 0) {
+      res.json({
+        message: `No unaggregated fees found for ${month}/${year}`,
+        totalAmount: 0,
+        paymentCount: 0
+      });
+      return;
+    }
+    
+    // Calculate total amount
+    const totalAmount = unaggregatedPayments.reduce((sum, payment) => sum + payment.paidAmount, 0);
+    
+    // Create a transaction in the main financial database
+    const transaction = await dbService.addTransaction({
+      description: `Tuition Fees Collection - ${month}/${year}`,
+      amount: totalAmount,
+      date: new Date().toISOString(),
+      type: 'income',
+      category: 'tuition-fees', // This should match a category in your main system
+      mainCategory: 'business'
+    });
+    
+    // Mark all payments as aggregated
+    const paymentIds = unaggregatedPayments.map(p => p.id);
+    await dbService.students.markPaymentsAsAggregated(paymentIds);
+    
+    // Record the aggregation in the tracking table
+    const aggregationRecord = {
+      id: crypto.randomUUID(),
+      month,
+      year,
+      totalAmount,
+      paymentCount: unaggregatedPayments.length,
+      transactionId: transaction.id,
+      aggregatedAt: new Date().toISOString()
+    };
+    
+    // Insert aggregation record
+    const stmt = dbService.getRawDatabase().prepare(`
+      INSERT INTO monthly_aggregations (
+        id, month, year, total_amount, payment_count, transaction_id, aggregated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    stmt.run(
+      aggregationRecord.id,
+      aggregationRecord.month,
+      aggregationRecord.year,
+      aggregationRecord.totalAmount,
+      aggregationRecord.paymentCount,
+      aggregationRecord.transactionId,
+      aggregationRecord.aggregatedAt
+    );
+    
+    res.json({
+      message: `Successfully aggregated ${unaggregatedPayments.length} fee payments totaling ₹${totalAmount.toLocaleString()} for ${month}/${year}`,
+      totalAmount,
+      paymentCount: unaggregatedPayments.length,
+      transactionId: transaction.id,
+      aggregationRecord
+    });
+  } catch (error) {
+    console.error('Error aggregating monthly fees:', error);
+    res.status(500).json({ message: 'Error aggregating monthly fees' });
+  }
+};
+
+// NEW: Get aggregation history
+const getAggregationHistory: RequestHandler = async (req, res) => {
+  try {
+    const stmt = dbService.getRawDatabase().prepare(`
+      SELECT 
+        id, month, year, total_amount as totalAmount, 
+        payment_count as paymentCount, transaction_id as transactionId,
+        aggregated_at as aggregatedAt
+      FROM monthly_aggregations 
+      ORDER BY year DESC, month DESC
+      LIMIT 12
+    `);
+    
+    const history = stmt.all();
+    res.json(history);
+  } catch (error) {
+    console.error('Error fetching aggregation history:', error);
+    res.status(500).json({ message: 'Error fetching aggregation history' });
+  }
+};
+
+// NEW: Auto-aggregate fees (can be called by a cron job)
+const autoAggregateLastMonth: RequestHandler = async (req, res) => {
+  try {
+    const now = new Date();
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const month = String(lastMonth.getMonth() + 1).padStart(2, '0');
+    const year = lastMonth.getFullYear();
+    
+    // Check if already aggregated
+    const existingAggregation = dbService.getRawDatabase().prepare(`
+      SELECT id FROM monthly_aggregations WHERE month = ? AND year = ?
+    `).get(month, year);
+    
+    if (existingAggregation) {
+      res.json({
+        message: `Fees for ${month}/${year} have already been aggregated`,
+        alreadyAggregated: true
+      });
+      return;
+    }
+    
+    // Perform aggregation
+    const unaggregatedPayments = await dbService.students.getUnaggregatedFeePayments(month, year);
+    
+    if (unaggregatedPayments.length === 0) {
+      res.json({
+        message: `No fees to aggregate for ${month}/${year}`,
+        totalAmount: 0,
+        paymentCount: 0
+      });
+      return;
+    }
+    
+    const totalAmount = unaggregatedPayments.reduce((sum, payment) => sum + payment.paidAmount, 0);
+    
+    // Create transaction in main database
+    const transaction = await dbService.addTransaction({
+      description: `Tuition Fees Collection - ${month}/${year} (Auto-aggregated)`,
+      amount: totalAmount,
+      date: new Date().toISOString(),
+      type: 'income',
+      category: 'tuition-fees',
+      mainCategory: 'business'
+    });
+    
+    // Mark payments as aggregated
+    const paymentIds = unaggregatedPayments.map(p => p.id);
+    await dbService.students.markPaymentsAsAggregated(paymentIds);
+    
+    // Record aggregation
+    const stmt = dbService.getRawDatabase().prepare(`
+      INSERT INTO monthly_aggregations (
+        id, month, year, total_amount, payment_count, transaction_id, aggregated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    stmt.run(
+      crypto.randomUUID(),
+      month,
+      year,
+      totalAmount,
+      unaggregatedPayments.length,
+      transaction.id,
+      new Date().toISOString()
+    );
+    
+    res.json({
+      message: `Auto-aggregated ${unaggregatedPayments.length} fee payments totaling ₹${totalAmount.toLocaleString()} for ${month}/${year}`,
+      totalAmount,
+      paymentCount: unaggregatedPayments.length,
+      transactionId: transaction.id,
+      autoAggregated: true
+    });
+  } catch (error) {
+    console.error('Error in auto-aggregation:', error);
+    res.status(500).json({ message: 'Error in auto-aggregation' });
   }
 };
 
@@ -293,5 +458,14 @@ router.post('/fees/generate', [
   body('month').matches(/^\d{2}$/),
   body('year').isInt({ min: 2020, max: 2030 })
 ], generateMonthlyFees);
+
+// NEW ROUTES for fee aggregation
+router.post('/fees/aggregate', [
+  body('month').matches(/^\d{2}$/),
+  body('year').isInt({ min: 2020, max: 2030 })
+], aggregateMonthlyFees);
+
+router.get('/fees/aggregation-history', getAggregationHistory);
+router.post('/fees/auto-aggregate', autoAggregateLastMonth);
 
 export default router;
